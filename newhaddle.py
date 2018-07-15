@@ -13,6 +13,8 @@ pd.set_option('display.height',1000)
 pd.set_option('display.max_rows',100)
 pd.set_option('display.max_columns',1000)
 pd.set_option('display.width',5000)
+# 取消科学计数
+# pd.set_option('display.float_format', lambda x: '%.5f' % x)
 
 # path = './../traindata'
 path = 'E:\\DATA\\tianjinbus\\traindata'
@@ -166,15 +168,36 @@ def haddle_missing(df):
                         temp['O_UP'] = temp['O_UP'].fillna(O_UP)
                         # 每一班公交车的缺失值填补
                         for x in temp.index:
+                            flag_index = []
                             if np.isnan(temp.loc[x,'sames_stamp']):
                                 sub_time_x = df[(df['O_TERMINALNO']==O_TERMINALNO)&(df['O_UP']==O_UP)&(df['O_NEXTSTATIONNO']==temp['O_NEXTSTATIONNO'][x])]['sames_stamp'].mean()
+                                speed = df[(df['O_TERMINALNO']==O_TERMINALNO)&(df['O_UP']==O_UP)&(df['O_NEXTSTATIONNO']==temp['O_NEXTSTATIONNO'][x])]['O_SPEED'].mean()
                                 longitude =  df[(df['O_TERMINALNO']==O_TERMINALNO)&(df['O_UP']==O_UP)&(df['O_NEXTSTATIONNO']==temp['O_NEXTSTATIONNO'][x])]['O_LONGITUDE'].median()
                                 latitude = df[(df['O_TERMINALNO']==O_TERMINALNO)&(df['O_UP']==O_UP)&(df['O_NEXTSTATIONNO']==temp['O_NEXTSTATIONNO'][x])]['O_LATITUDE'].median()
-                                print(sub_time_x,longitude,latitude) 
+                                print(sub_time_x,longitude,latitude,speed) 
                                 temp.loc[x,'sames_stamp'] = sub_time_x
+                                temp.loc[x,'O_SPEED'] = speed
                                 temp.loc[x,'O_LONGITUDE'] = longitude
                                 temp.loc[x,'O_LATITUDE'] = latitude
                         temp = temp.drop(['sames_station'], axis=1)
+                        # 求时间戳
+                        # 第一个公交站为空的插值处理
+                        if np.isnan(temp.loc[0, 'time_stamp']):
+                            # 第一个不为空的标记k
+                            k = 0
+                            while np.isnan(temp.loc[k, 'time_stamp']):
+                                k += 1
+                            flag = k
+                            while k>0:
+                                temp.loc[k-1, 'time_stamp'] = temp.loc[k, 'time_stamp'] - temp.loc[k-1, 'sames_stamp']
+                                k -= 1
+                        else:
+                            flag = 0
+                        for y in temp.index[flag+1:]:
+                            if np.isnan(temp.loc[y, 'time_stamp']):
+                                temp.loc[y, 'time_stamp'] = temp.loc[y-1, 'time_stamp'] + temp.loc[y-1, 'sames_stamp']
+                        temp['O_TIME'] = temp['time_stamp'].map(lambda x: time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(x)) if not np.isnan(x) else '0')
+                        temp = temp.drop(['sames_station', 'day'], axis=1)
                         # print(temp)
                         up_list_temp.append(temp)
                 else:
@@ -185,7 +208,7 @@ def haddle_missing(df):
         # print(up_df_list)
         if up_df_list:
             ter_up_df_list.append(pd.concat(up_df_list))
-    ter_up_df = pd.concat(ter_up_df_list)
+    ter_up_df = pd.concat(ter_up_df_list).sort_values(by='O_TIME', inplace=True).reset_index(drop=True)
     ter_up_df.to_csv('fillallmissing.csv', index=None)
     return ter_up_df
 
@@ -213,83 +236,4 @@ if __name__ == '__main__':
     #     for future in executor.map(station_time, l):
     #         print(future)
     # # station_time(df)
-
-
-    df_test = pd.read_csv('E:\\DATA\\tianjinbus\\toBePredicted_forUser.csv')
-    df_train = pd.read_csv('1_newhaddletrain.csv')
-    l_ter = pd.unique(df_test['O_TERMINALNO'])
-    def dic_max_stationno(df):
-        dic = {}
-        lineno = df['O_LINENO'].unique()
-        for up in range(2): 
-            for no in lineno:
-                temp = df[(df['O_LINENO']==no)&(df['O_UP']==up)]['O_NEXTSTATIONNO'].unique()
-                if len(temp)>0:
-                    dic[(up, no)] = temp.max()
-                else:
-                    pass
-        return dic
-    # print(dic_max_stationno(df_train))
-    d_max_stationno = dic_max_stationno(df_train)
-    # print(d_max_stationno)
-    ter_up_df_list = []
-    for terminalno in l_ter:
-        # print('>>>>>>>>>>>>>>>>>>>>>>>>>', terminalno)
-        up_state = pd.unique(df_test[df_test['O_TERMINALNO']==terminalno]['O_UP'])
-        # pd_list是与df_join，join之后的df列表
-        up_df_list = []
-        for up in up_state:
-            O_TERMINALNO = terminalno
-            O_UP = up
-            df = df_train[(df_train['O_TERMINALNO']==terminalno) & (df_train['O_UP']==up)].sort_values(by='O_TIME').reset_index(drop=True)
-            if not df.empty:
-                print('>>>>>>>>>>>>>>>>>>>>>>>>>', terminalno)
-                O_LINENO = df.loc[0, 'O_LINENO']
-                # print(df.shape)
-                df['sames_station'] = df['O_NEXTSTATIONNO'].diff(-1)
-                # print(df)
-                idx = []
-                for i in df.index:
-                    if df['sames_station'][i] > 0:
-                        idx.append(i)
-                # print(idx)
-                # print(d_max_stationno.get((O_UP, O_LINENO)))
-                if d_max_stationno.get((O_UP, O_LINENO)):
-                    df_join = pd.DataFrame([[i] for i in range(2, d_max_stationno.get((O_UP, O_LINENO))+1)], columns=['O_NEXTSTATIONNO'])
-                # up_list_temp为临时的按照idx分割处理后的df的列表集合
-                up_list_temp = []
-                if idx:
-                    for i in range(len(idx)):
-                        if i==0:
-                            left = df.iloc[:idx[0]+1]
-                        elif i==len(idx)-1:
-                            left = df.iloc[idx[i]+1:]
-                        else:
-                            left = df.iloc[idx[i]+1:idx[i+1]+1]
-                        temp = pd.merge(df_join, left, how='left', on=['O_NEXTSTATIONNO'])
-                        temp['O_LINENO'] = temp['O_LINENO'].fillna(O_LINENO)
-                        temp['O_TERMINALNO'] = temp['O_TERMINALNO'].fillna(O_TERMINALNO)
-                        temp['O_UP'] = temp['O_UP'].fillna(O_UP)
-                        # 每一班公交车的缺失值填补
-                        for x in temp.index:
-                            if np.isnan(temp.loc[x,'sames_stamp']):
-                                sub_time_x = df[(df['O_TERMINALNO']==O_TERMINALNO)&(df['O_UP']==O_UP)&(df['O_NEXTSTATIONNO']==temp['O_NEXTSTATIONNO'][x])]['sames_stamp'].mean()
-                                longitude =  df[(df['O_TERMINALNO']==O_TERMINALNO)&(df['O_UP']==O_UP)&(df['O_NEXTSTATIONNO']==temp['O_NEXTSTATIONNO'][x])]['O_LONGITUDE'].median()
-                                latitude = df[(df['O_TERMINALNO']==O_TERMINALNO)&(df['O_UP']==O_UP)&(df['O_NEXTSTATIONNO']==temp['O_NEXTSTATIONNO'][x])]['O_LATITUDE'].median()
-                                print(sub_time_x,longitude,latitude) 
-                                temp.loc[x,'sames_stamp'] = sub_time_x
-                                temp.loc[x,'O_LONGITUDE'] = longitude
-                                temp.loc[x,'O_LATITUDE'] = latitude
-                        temp = temp.drop(['sames_station'], axis=1)
-                        # print(temp)
-                        up_list_temp.append(temp)
-                else:
-                    up_list_temp.append(df)
-                up_df_list.append(pd.concat(up_list_temp))
-            else:
-                print("{0} is not in train data.".format(O_TERMINALNO))
-        # print(up_df_list)
-        if up_df_list:
-            ter_up_df_list.append(pd.concat(up_df_list))
-    print(pd.concat(ter_up_df_list))
 
